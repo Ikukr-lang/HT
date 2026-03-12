@@ -1,4 +1,4 @@
-# ================== app.py (СТАБИЛЬНАЯ ВЕРСИЯ — COOKIES от hattrick.org) ==================
+# ================== app.py (УЛУЧШЕННАЯ ВЕРСИЯ — COOKIES) ==================
 import os
 import re
 import math
@@ -96,58 +96,69 @@ def get_scraper():
 def save_cookies(scraper):
     session["hattrick_cookies"] = dict(scraper.cookies)
 
-# ================== HTML ==================
+# ================== УЛУЧШЕННЫЙ HTML ==================
 HTML_COOKIES = """
 <!DOCTYPE html>
 <html lang="ru">
-<head><meta charset="utf-8"><title>Hattrick Analyzer — Cookies</title><style>body{font-family:Arial;max-width:700px;margin:40px auto;padding:20px;background:#f0f2f5;}</style></head>
+<head><meta charset="utf-8"><title>Hattrick Analyzer — Cookies</title><style>body{font-family:Arial;max-width:800px;margin:40px auto;padding:20px;background:#f0f2f5;line-height:1.6;}</style></head>
 <body>
 <h1>🔑 Авторизация через cookies (hattrick.org)</h1>
+<p><strong>Самый простой способ (работает в 2026 году):</strong></p>
 <ol>
-<li>Открой <a href="https://www.hattrick.org" target="_blank">hattrick.org</a> и войди в аккаунт</li>
-<li>Нажми F12 → вкладка <b>Application</b> (Chrome) или <b>Storage → Cookies</b></li>
-<li>Найди домен hattrick.org</li>
-<li>Скопируй все cookies (или хотя бы .ASPXAUTH и ASP.NET_SessionId) в формате:<br><code>name1=value1; name2=value2</code></li>
+<li>Открой <a href="https://www.hattrick.org" target="_blank">hattrick.org</a> и войди в свой аккаунт</li>
+<li>Нажми <strong>F12</strong> → вкладка <strong>Application</strong> (или <strong>Storage</strong>)</li>
+<li>В левом меню: <strong>Cookies → https://www.hattrick.org</strong></li>
+<li>Выдели все cookies (Ctrl + A)</li>
+<li>Правой кнопкой → Copy (или используй расширение ниже)</li>
+<li>Вставь сюда</li>
 </ol>
+
+<p><strong>Ещё проще — расширение Chrome (рекомендую):</strong><br>
+<a href="https://chromewebstore.google.com/detail/copy-cookies/jcbpglbplpblnagieibnemmkiamekcdg" target="_blank">Установить «Copy Cookies»</a> → на hattrick.org нажми Ctrl+Shift+K → вставь сюда.</p>
+
+<p><strong>Пример того, что должно быть:</strong><br>
+<code>.ASPXAUTH=abc123...; ASP.NET_SessionId=xyz456...; ...</code></p>
+
 <form method="post">
-    <textarea name="cookies" rows="6" placeholder="Вставь сюда cookies (name=value; ...)" style="width:100%" required></textarea>
-    <button type="submit">Сохранить cookies и войти</button>
+    <textarea name="cookies" rows="8" placeholder="Вставь сюда cookies (name=value; name2=value2)" style="width:100%; font-family:monospace;" required></textarea>
+    <button type="submit" style="padding:15px;font-size:18px;">Сохранить cookies и войти</button>
 </form>
 </body></html>
 """
 
 HTML_MAIN = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Hattrick Analyzer</title><style>body{font-family:Arial;max-width:700px;margin:40px auto;padding:20px;background:#f0f2f5;}</style></head><body><h1>⚽ Hattrick Match Analyzer</h1><form method="post"><input type="url" name="url" placeholder="https://www.hattrick.org/...MatchID=..." required><button type="submit">Анализировать матч</button></form><a href="/set_cookies">Обновить cookies</a></body></html>"""
 
-HTML_RESULT = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Результат</title><style>body{font-family:Arial;max-width:700px;margin:40px auto;padding:20px;background:#f0f2f5;line-height:1.6;}</style></head><body><h1>✅ Результат</h1><p><strong>🏠 Победа хозяев:</strong> {{ win_h }}%</p><p><strong>🤝 Ничья:</strong> {{ draw }}%</p><p><strong>🏟️ Победа гостей:</strong> {{ win_a }}%</p><p>Владение: 45' {{ p45 }}% | 90' {{ p90 }}% | Центр {{ center }}%</p><hr><a href="/">Ещё матч</a></body></html>"""
+HTML_RESULT = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Результат</title><style>body{font-family:Arial;max-width:700px;margin:40px auto;padding:20px;background:#f0f2f5;line-height:1.6;}</style></head><body><h1>✅ Результат анализа</h1><p><strong>🏠 Победа хозяев:</strong> {{ win_h }}%</p><p><strong>🤝 Ничья:</strong> {{ draw }}%</p><p><strong>🏟️ Победа гостей:</strong> {{ win_a }}%</p><p>Владение: 45' {{ p45 }}% | 90' {{ p90 }}% | Центр поля {{ center }}%</p><hr><a href="/">Ещё матч</a></body></html>"""
 
 # ================== МАРШРУТЫ ==================
 @app.route("/set_cookies", methods=["GET", "POST"])
 def set_cookies():
     if request.method == "POST":
         cookie_str = request.form["cookies"].strip()
+        if cookie_str.startswith("Cookie:"):
+            cookie_str = cookie_str[7:].strip()
         try:
             cookie = SimpleCookie()
             cookie.load(cookie_str)
             scraper = cloudscraper.create_scraper()
             for key, morsel in cookie.items():
                 scraper.cookies.set(key, morsel.value)
-            # Проверяем вход
+            # Проверка входа
             r = scraper.get("https://www.hattrick.org", timeout=10)
-            if any(w in r.text.lower() for w in ["logout", "выход", "log out"]):
+            if any(w in r.text.lower() for w in ["logout", "выход", "log out", "my hattrick"]):
                 save_cookies(scraper)
                 flash("✅ Cookies сохранены! Ты авторизован.")
                 return redirect("/")
             else:
-                flash("❌ Cookies не подошли (проверь, что ты залогинен в браузере)")
+                flash("❌ Cookies не подошли. Убедись, что ты залогинен в браузере и скопировал правильные cookies.")
         except Exception as e:
-            flash(f"Ошибка: {str(e)}")
+            flash(f"Ошибка обработки: {str(e)}")
     return render_template_string(HTML_COOKIES)
 
 @app.route("/", methods=["GET", "POST"])
 def index():
     if "hattrick_cookies" not in session:
         return redirect("/set_cookies")
-
     if request.method == "POST":
         url = request.form.get("url", "").strip()
         if "MatchID=" not in url:
