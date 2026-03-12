@@ -1,6 +1,5 @@
 FROM python:3.12-slim-bookworm
 
-# Устанавливаем Tesseract + русский язык (обязательно!)
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-rus \
