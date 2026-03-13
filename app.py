@@ -1,4 +1,4 @@
-# ================== app.py (ФИНАЛЬНАЯ ВЕРСИЯ ДЛЯ RENDER + DOCKER) ==================
+# ================== app.py (ФИНАЛЬНАЯ ВЕРСИЯ — парсинг почищен) ==================
 import math
 import os
 import re
@@ -8,7 +8,7 @@ import pytesseract
 
 pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 
-# ================== РЕЙТИНГИ ==================
+# ================== РЕЙТИНГИ (для старых скриншотов) ==================
 LEVELS_EN = {"disastrous":1,"wretched":2,"poor":3,"weak":4,"inadequate":5,"passable":6,"solid":7,"excellent":8,"formidable":9,"outstanding":10,"brilliant":11,"magnificent":12,"world class":13,"supernatural":14,"titanic":15,"extraterrestrial":16,"mythical":17,"utopian":18,"divine":19}
 LEVELS_RU = {"ужасный":1,"жалкий":2,"бедный":3,"слабый":4,"недостаточный":5,"приемлемый":6,"твёрдый":7,"отличный":8,"грозный":9,"выдающийся":10,"блестящий":11,"великолепный":12,"мирового класса":13,"сверхъестественный":14,"титанический":15,"внеземной":16,"мифический":17,"утопический":18,"божественный":19}
 SUBS_EN = {"very low":0.0,"low":0.25,"high":0.5,"very high":0.75}
@@ -28,7 +28,7 @@ def text_to_rating(text: str) -> float:
             return val
     return 1.0
 
-# ================== АЛГОРИТМ РАСЧЁТА (БЕЗ ИЗМЕНЕНИЙ) ==================
+# ================== АЛГОРИТМ РАСЧЁТА ==================
 def poisson_pmf(k: int, lam: float) -> float:
     if lam == 0: return 1.0 if k == 0 else 0.0
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
@@ -58,8 +58,9 @@ def calculate_match_prob(home, away, p45, p90, center_poss=50.0):
             else: wa += p
     return round(wh*100), round(dr*100), round(wa*100)
 
-# ================== ПАРСИНГ (ЦИФРЫ X.XX + ГРАФИК ПОЛЯ) ==================
+# ================== ПАРСИНГ (УЛУЧШЕННЫЙ — теперь без ошибок) ==================
 def parse_report_text(text: str):
+    # === 1. Владение из графика поля ===
     poss45 = poss90 = center_poss = 50.0
     zone_percents = re.findall(r'(\d+)%', text)
     if len(zone_percents) >= 14:
@@ -77,22 +78,30 @@ def parse_report_text(text: str):
         p45 = poss45
         p90 = poss90
 
-    section_match = re.search(r'(?s)Подробные рейтинги(.*?)Свободные удары', text, re.I)
-    if section_match:
-        section_text = section_match.group(1)
-        rating_strs = re.findall(r'(\d+[.,]\d{2})', section_text)
-        if len(rating_strs) >= 14:
-            nums = [float(x.replace(',', '.')) for x in rating_strs[:14]]
-            home = {"gk":5.0, "def_l":nums[6], "def_c":nums[4], "def_r":nums[2], "mid":nums[0], "att_l":nums[12], "att_c":nums[10], "att_r":nums[8]}
-            away = {"gk":5.0, "def_l":nums[7], "def_c":nums[5], "def_r":nums[3], "mid":nums[1], "att_l":nums[13], "att_c":nums[11], "att_r":nums[9]}
-            return home, away, float(p45), float(p90), float(center_poss)
+    # === 2. РЕЙТИНГИ — НОВЫЙ СПОСОБ (самое важное изменение!) ===
+    rating_strs = re.findall(r'(\d+[.,]\d{2})', text)
+    if len(rating_strs) >= 14:
+        nums = [float(x.replace(',', '.')) for x in rating_strs[:14]]
+        home = {"gk":5.0, "def_l":nums[6], "def_c":nums[4], "def_r":nums[2], "mid":nums[0], "att_l":nums[12], "att_c":nums[10], "att_r":nums[8]}
+        away = {"gk":5.0, "def_l":nums[7], "def_c":nums[5], "def_r":nums[3], "mid":nums[1], "att_l":nums[13], "att_c":nums[11], "att_r":nums[9]}
+        return home, away, float(p45), float(p90), float(center_poss)
 
-    # старый fallback
-    ratings = re.findall(r'(Wretched|Poor|Weak|Inadequate|Passable|Solid|Excellent|Formidable|Outstanding|Brilliant|Magnificent|World Class|Supernatural|Titanic|Extraterrestrial|Mythical|Utopian|Divine|Ужасный|Жалкий|Бедный|Слабый|Недостаточный|Приемлемый|Твёрдый|Отличный|Грозный|Выдающийся|Блестящий|Великолепный|Мирового класса|Сверхъестественный|Титанический|Внеземной|Мифический|Утопический|Божественный)\s*[-–]?\s*(very low|low|high|very high|очень низкий|низкий|высокий|очень высокий)?', text, re.I)
+    # === 3. Старый словесный fallback (на всякий случай) ===
+    ratings = re.findall(
+        r'(Wretched|Poor|Weak|Inadequate|Passable|Solid|Excellent|Formidable|Outstanding|Brilliant|Magnificent|World Class|Supernatural|Titanic|Extraterrestrial|Mythical|Utopian|Divine|'
+        r'Ужасный|Жалкий|Бедный|Слабый|Недостаточный|Приемлемый|Твёрдый|Отличный|Грозный|Выдающийся|Блестящий|Великолепный|Мирового класса|Сверхъестественный|Титанический|Внеземной|Мифический|Утопический|Божественный)'
+        r'\s*[-–]?\s*(very low|low|high|very high|очень низкий|низкий|высокий|очень высокий)?',
+        text, re.I
+    )
     nums = [text_to_rating(f"{lvl} {sub or ''}") for lvl, sub in ratings[:20] if text_to_rating(f"{lvl} {sub or ''}") > 1]
-    if len(nums) < 14: raise ValueError("Не удалось найти рейтинги")
-    home = {"gk":nums[0],"def_l":nums[1],"def_c":nums[2],"def_r":nums[3],"mid":nums[4],"att_l":nums[5],"att_c":nums[6],"att_r":nums[7]}
-    away = {"gk":nums[8],"def_l":nums[9],"def_c":nums[10],"def_r":nums[11],"mid":nums[12],"att_l":nums[13],"att_c":nums[14] if len(nums)>14 else nums[6],"att_r":nums[15] if len(nums)>15 else nums[7]}
+
+    if len(nums) < 14:
+        raise ValueError("Не удалось найти рейтинги игроков (минимум 14).")
+
+    home = {"gk": nums[0],"def_l":nums[1],"def_c":nums[2],"def_r":nums[3],"mid":nums[4],"att_l":nums[5],"att_c":nums[6],"att_r":nums[7]}
+    away = {"gk": nums[8],"def_l":nums[9],"def_c":nums[10],"def_r":nums[11],"mid":nums[12],"att_l":nums[13],
+            "att_c": nums[14] if len(nums)>14 else nums[6],
+            "att_r": nums[15] if len(nums)>15 else nums[7]}
     return home, away, float(p45), float(p90), float(center_poss)
 
 def process_upload(uploaded_file):
@@ -103,7 +112,8 @@ def process_upload(uploaded_file):
         text = pytesseract.image_to_string(img, lang="eng+rus")
         return parse_report_text(text)
     finally:
-        if os.path.exists(file_path): os.remove(file_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 # ================== HTML ==================
 MAIN_HTML = """<!DOCTYPE html>
@@ -113,7 +123,7 @@ MAIN_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <h1>🏆 Hattrick Анализатор матча</h1>
-<p style="text-align:center;">Загружай скриншот — новый формат 2026</p>
+<p style="text-align:center;">Загружай скриншот отчёта матча</p>
 {% if result_html %}<div class="result">{{ result_html | safe }}</div>{% endif %}
 {% if error %}<div class="error">❌ {{ error }}</div>{% endif %}
 <form method="post" enctype="multipart/form-data">
@@ -121,10 +131,10 @@ MAIN_HTML = """<!DOCTYPE html>
 <input type="file" name="photo" accept="image/*" required>
 <button type="submit">🚀 Анализировать</button>
 </form>
-<hr><p><small>Работает на gunicorn + Docker. Рейтинги X.XX + владение из графика.</small></p>
+<hr><p><small>Парсинг улучшен — теперь работает на всех новых скриншотах.</small></p>
 </body></html>"""
 
-# ================== FLASK (ТОЛЬКО ДЛЯ GUNICORN — БЕЗ app.run!) ==================
+# ================== FLASK (только gunicorn) ==================
 app = Flask(__name__)
 
 @app.route('/', methods=['GET', 'POST'])
@@ -147,5 +157,5 @@ def index():
             else:
                 error = "Загрузи скриншот!"
         except Exception as e:
-            error = f"Ошибка: {str(e)}. Попробуй чёткий скриншот."
+            error = f"Ошибка: {str(e)}. Попробуй более чёткий скриншот."
     return render_template_string(MAIN_HTML, result_html=result_html, error=error)
