@@ -1,16 +1,18 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim
 
-# Установка Tesseract
+# Устанавливаем Tesseract + русский язык (т.к. у тебя lang="eng+rus")
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-rus \
     && rm -rf /var/lib/apt/lists/*
 
-COPY . /app
 WORKDIR /app
 
+# Устанавливаем Python-зависимости
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-EXPOSE 10000
-# Главный фикс: используем $PORT + таймаут 90 сек (для OCR)
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --timeout 90 app:app"]
+COPY . .
+
+# Запуск (Render сам подставит PORT)
+CMD ["python", "app.py"]
