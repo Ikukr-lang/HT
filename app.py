@@ -1,17 +1,15 @@
-# ================== app.py (только загрузка скриншота) ==================
+# ================== app.py (обновлённая версия для нового формата скриншотов) ==================
 import math
 import os
 import re
 from flask import Flask, request, render_template_string
 from PIL import Image
 import pytesseract
-import cloudscraper
-from bs4 import BeautifulSoup
 
 # === ФИКС TESSERACT ДЛЯ RENDER ===
 pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 
-# ================== РЕЙТИНГИ ==================
+# ================== РЕЙТИНГИ (старый формат — оставлен для совместимости) ==================
 LEVELS_EN = {
     "disastrous":1,"wretched":2,"poor":3,"weak":4,"inadequate":5,
     "passable":6,"solid":7,"excellent":8,"formidable":9,"outstanding":10,
@@ -41,7 +39,7 @@ def text_to_rating(text: str) -> float:
             return val
     return 1.0
 
-# ================== АЛГОРИТМ РАСЧЁТА ==================
+# ================== АЛГОРИТМ РАСЧЁТА (оставлен БЕЗ ИЗМЕНЕНИЙ) ==================
 def poisson_pmf(k: int, lam: float) -> float:
     if lam == 0: return 1.0 if k == 0 else 0.0
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
@@ -74,17 +72,58 @@ def calculate_match_prob(home, away, p45, p90, center_poss=50.0):
             else: wa += p
     return round(wh*100), round(dr*100), round(wa*100)
 
-# ================== ПАРСИНГ ==================
+# ================== ПАРСИНГ (обновлён для нового формата скриншотов) ==================
 def parse_report_text(text: str):
+    # === 1. ВЛАДЕНИЕ ИЗ ГРАФИКА ПОЛЯ (новый формат — берём все зоны с 0 минуты) ===
     poss45 = poss90 = center_poss = 50.0
-    m = re.search(r"45['′]?\D*(\d+)%", text, re.I)
-    if m: poss45 = float(m.group(1))
-    m = re.search(r"90['′]?\D*(\d+)%", text, re.I)
-    if m: poss90 = float(m.group(1))
-    for pat in [r"центр.*?(\d+)%", r"center.*?(\d+)%", r"midfield.*?(\d+)%", r"владения в центре.*?(\d+)%"]:
-        m = re.search(pat, text, re.I)
-        if m: center_poss = float(m.group(1)); break
+    zone_percents = re.findall(r'(\d+)%', text)
+    if len(zone_percents) >= 14:  # 7 зон × 2 команды (home/away чередуются)
+        home_zones = [int(x) for x in zone_percents[0::2][:7]]
+        p45 = p90 = round(sum(home_zones) / len(home_zones))
+        center_poss = home_zones[3] if len(home_zones) > 3 else p45  # 4-я зона = центр
+    else:
+        # старый fallback (если скриншот старого формата)
+        m = re.search(r"45['′]?\D*(\d+)%", text, re.I)
+        if m: poss45 = float(m.group(1))
+        m = re.search(r"90['′]?\D*(\d+)%", text, re.I)
+        if m: poss90 = float(m.group(1))
+        for pat in [r"центр.*?(\d+)%", r"center.*?(\d+)%", r"midfield.*?(\d+)%", r"владения в центре.*?(\d+)%"]:
+            m = re.search(pat, text, re.I)
+            if m: center_poss = float(m.group(1)); break
+        p45 = poss45
+        p90 = poss90
 
+    # === 2. РЕЙТИНГИ ИГРОКОВ (новый формат — 14 числовых значений из «Подробные рейтинги») ===
+    section_match = re.search(r'(?s)Подробные рейтинги(.*?)Свободные удары', text, re.I)
+    if section_match:
+        section_text = section_match.group(1)
+        rating_strs = re.findall(r'(\d+[.,]\d{2})', section_text)
+        if len(rating_strs) >= 14:
+            nums = [float(x.replace(',', '.')) for x in rating_strs[:14]]
+            # маппинг по порядку строк (mid, def_r, def_c, def_l, att_r, att_c, att_l)
+            home = {
+                "gk": 5.0,          # не используется
+                "def_l": nums[6],
+                "def_c": nums[4],
+                "def_r": nums[2],
+                "mid": nums[0],
+                "att_l": nums[12],
+                "att_c": nums[10],
+                "att_r": nums[8]
+            }
+            away = {
+                "gk": 5.0,
+                "def_l": nums[7],
+                "def_c": nums[5],
+                "def_r": nums[3],
+                "mid": nums[1],
+                "att_l": nums[13],
+                "att_c": nums[11],
+                "att_r": nums[9]
+            }
+            return home, away, float(p45), float(p90), float(center_poss)
+
+    # === 3. Fallback на старый парсинг по словам (для очень старых скриншотов) ===
     ratings = re.findall(
         r'(Wretched|Poor|Weak|Inadequate|Passable|Solid|Excellent|Formidable|Outstanding|Brilliant|Magnificent|World Class|Supernatural|Titanic|Extraterrestrial|Mythical|Utopian|Divine|'
         r'Ужасный|Жалкий|Бедный|Слабый|Недостаточный|Приемлемый|Твёрдый|Отличный|Грозный|Выдающийся|Блестящий|Великолепный|Мирового класса|Сверхъестественный|Титанический|Внеземной|Мифический|Утопический|Божественный)'
@@ -100,7 +139,7 @@ def parse_report_text(text: str):
     away = {"gk": nums[8],"def_l":nums[9],"def_c":nums[10],"def_r":nums[11],"mid":nums[12],"att_l":nums[13],
             "att_c": nums[14] if len(nums)>14 else nums[6],
             "att_r": nums[15] if len(nums)>15 else nums[7]}
-    return home, away, poss45, poss90, center_poss
+    return home, away, float(p45), float(p90), float(center_poss)
 
 def process_upload(uploaded_file):
     file_path = f"/tmp/screenshot_{os.urandom(16).hex()}.png"
@@ -113,7 +152,7 @@ def process_upload(uploaded_file):
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# ================== HTML (только скриншот) ==================
+# ================== HTML (без изменений) ==================
 MAIN_HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -132,7 +171,7 @@ MAIN_HTML = """<!DOCTYPE html>
 </head>
 <body>
     <h1>🏆 Hattrick Анализатор матча</h1>
-    <p style="text-align:center;">Загружай скриншот отчёта матча — работает через OCR</p>
+    <p style="text-align:center;">Загружай скриншот отчёта матча — работает через OCR (новый + старый формат)</p>
 
     {% if result_html %}
     <div class="result">{{ result_html | safe }}</div>
@@ -149,7 +188,7 @@ MAIN_HTML = """<!DOCTYPE html>
     </form>
 
     <hr>
-    <p><small>Алгоритм полностью как в твоём Telegram-боте. Работает на Render.com.</small></p>
+    <p><small>Алгоритм расчёта полностью как раньше. Теперь берёт цифры рейтингов и владение из графика поля.</small></p>
 </body>
 </html>"""
 
