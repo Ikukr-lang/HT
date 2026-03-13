@@ -1,4 +1,4 @@
-# ================== app.py (обновлённая версия для нового формата скриншотов) ==================
+# ================== app.py (ПОЛНОСТЬЮ НОВЫЙ КОД ДЛЯ RENDER + DOCKER + gunicorn) ==================
 import math
 import os
 import re
@@ -6,10 +6,10 @@ from flask import Flask, request, render_template_string
 from PIL import Image
 import pytesseract
 
-# === ФИКС TESSERACT ДЛЯ RENDER ===
+# === ФИКС TESSERACT (работает в Docker) ===
 pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 
-# ================== РЕЙТИНГИ (старый формат — оставлен для совместимости) ==================
+# ================== РЕЙТИНГИ (для старых скриншотов) ==================
 LEVELS_EN = {
     "disastrous":1,"wretched":2,"poor":3,"weak":4,"inadequate":5,
     "passable":6,"solid":7,"excellent":8,"formidable":9,"outstanding":10,
@@ -39,7 +39,7 @@ def text_to_rating(text: str) -> float:
             return val
     return 1.0
 
-# ================== АЛГОРИТМ РАСЧЁТА (оставлен БЕЗ ИЗМЕНЕНИЙ) ==================
+# ================== АЛГОРИТМ РАСЧЁТА (БЕЗ ИЗМЕНЕНИЙ) ==================
 def poisson_pmf(k: int, lam: float) -> float:
     if lam == 0: return 1.0 if k == 0 else 0.0
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
@@ -72,17 +72,17 @@ def calculate_match_prob(home, away, p45, p90, center_poss=50.0):
             else: wa += p
     return round(wh*100), round(dr*100), round(wa*100)
 
-# ================== ПАРСИНГ (обновлён для нового формата скриншотов) ==================
+# ================== ПАРСИНГ (НОВЫЙ — для скриншотов 2026 с цифрами X.XX и графиком поля) ==================
 def parse_report_text(text: str):
-    # === 1. ВЛАДЕНИЕ ИЗ ГРАФИКА ПОЛЯ (новый формат — берём все зоны с 0 минуты) ===
+    # === 1. ВЛАДЕНИЕ ИЗ ГРАФИКА ПОЛЯ (все зоны с 0 минуты) ===
     poss45 = poss90 = center_poss = 50.0
     zone_percents = re.findall(r'(\d+)%', text)
-    if len(zone_percents) >= 14:  # 7 зон × 2 команды (home/away чередуются)
+    if len(zone_percents) >= 14:
         home_zones = [int(x) for x in zone_percents[0::2][:7]]
-        p45 = p90 = round(sum(home_zones) / len(home_zones))
-        center_poss = home_zones[3] if len(home_zones) > 3 else p45  # 4-я зона = центр
+        p45 = p90 = round(sum(home_zones) / len(home_zones)) if home_zones else 50
+        center_poss = home_zones[3] if len(home_zones) > 3 else p45
     else:
-        # старый fallback (если скриншот старого формата)
+        # fallback старый формат
         m = re.search(r"45['′]?\D*(\d+)%", text, re.I)
         if m: poss45 = float(m.group(1))
         m = re.search(r"90['′]?\D*(\d+)%", text, re.I)
@@ -93,16 +93,15 @@ def parse_report_text(text: str):
         p45 = poss45
         p90 = poss90
 
-    # === 2. РЕЙТИНГИ ИГРОКОВ (новый формат — 14 числовых значений из «Подробные рейтинги») ===
+    # === 2. РЕЙТИНГИ (14 чисел X.XX из раздела «Подробные рейтинги») ===
     section_match = re.search(r'(?s)Подробные рейтинги(.*?)Свободные удары', text, re.I)
     if section_match:
         section_text = section_match.group(1)
         rating_strs = re.findall(r'(\d+[.,]\d{2})', section_text)
         if len(rating_strs) >= 14:
             nums = [float(x.replace(',', '.')) for x in rating_strs[:14]]
-            # маппинг по порядку строк (mid, def_r, def_c, def_l, att_r, att_c, att_l)
             home = {
-                "gk": 5.0,          # не используется
+                "gk": 5.0,
                 "def_l": nums[6],
                 "def_c": nums[4],
                 "def_r": nums[2],
@@ -123,7 +122,7 @@ def parse_report_text(text: str):
             }
             return home, away, float(p45), float(p90), float(center_poss)
 
-    # === 3. Fallback на старый парсинг по словам (для очень старых скриншотов) ===
+    # === 3. Старый fallback (словесные рейтинги) ===
     ratings = re.findall(
         r'(Wretched|Poor|Weak|Inadequate|Passable|Solid|Excellent|Formidable|Outstanding|Brilliant|Magnificent|World Class|Supernatural|Titanic|Extraterrestrial|Mythical|Utopian|Divine|'
         r'Ужасный|Жалкий|Бедный|Слабый|Недостаточный|Приемлемый|Твёрдый|Отличный|Грозный|Выдающийся|Блестящий|Великолепный|Мирового класса|Сверхъестественный|Титанический|Внеземной|Мифический|Утопический|Божественный)'
@@ -152,7 +151,7 @@ def process_upload(uploaded_file):
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# ================== HTML (без изменений) ==================
+# ================== HTML ==================
 MAIN_HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -171,7 +170,7 @@ MAIN_HTML = """<!DOCTYPE html>
 </head>
 <body>
     <h1>🏆 Hattrick Анализатор матча</h1>
-    <p style="text-align:center;">Загружай скриншот отчёта матча — работает через OCR (новый + старый формат)</p>
+    <p style="text-align:center;">Загружай скриншот отчёта — новый формат 2026 + старый</p>
 
     {% if result_html %}
     <div class="result">{{ result_html | safe }}</div>
@@ -184,15 +183,15 @@ MAIN_HTML = """<!DOCTYPE html>
     <form method="post" enctype="multipart/form-data">
         <h2>📸 Загрузить скриншот</h2>
         <input type="file" name="photo" accept="image/*" required>
-        <button type="submit">🚀 Анализировать скриншот</button>
+        <button type="submit">🚀 Анализировать</button>
     </form>
 
     <hr>
-    <p><small>Алгоритм расчёта полностью как раньше. Теперь берёт цифры рейтингов и владение из графика поля.</small></p>
+    <p><small>Работает на Docker + gunicorn. Рейтинги X.XX + владение из графика поля.</small></p>
 </body>
 </html>"""
 
-# ================== FLASK ==================
+# ================== FLASK (только для gunicorn — без app.run!) ==================
 app = Flask(__name__)
 
 @app.route('/', methods=['GET', 'POST'])
@@ -215,8 +214,5 @@ def index():
             else:
                 error = "Загрузи скриншот!"
         except Exception as e:
-            error = f"Ошибка: {str(e)}. Попробуй более чёткий скриншот."
+            error = f"Ошибка: {str(e)}. Попробуй чёткий скриншот."
     return render_template_string(MAIN_HTML, result_html=result_html, error=error)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
